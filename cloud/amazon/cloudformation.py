@@ -323,7 +323,6 @@ def main():
                              template_body=template_body,
                              notification_arns=notification_arns,
                              stack_policy_body=stack_policy_body,
-                             stack_policy_during_update_body=stack_policy_during_update_body,
                              template_url=template_url,
                              disable_rollback=disable_rollback,
                              capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
