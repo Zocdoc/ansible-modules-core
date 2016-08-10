@@ -244,6 +244,7 @@ def main():
             template=dict(default=None, required=False, type='path'),
             notification_arns=dict(default=None, required=False),
             stack_policy=dict(default=None, required=False),
+            stack_policy_during_update=dict(default=None, required=False),
             disable_rollback=dict(default=False, type='bool'),
             template_url=dict(default=None, required=False),
             template_format=dict(default='json', choices=['json', 'yaml'], required=False),
@@ -283,6 +284,11 @@ def main():
     else:
         stack_policy_body = None
 
+    if module.params['stack_policy_during_update'] is not None:
+        stack_policy_during_update_body = open(module.params['stack_policy_during_update'], 'r').read()
+    else:
+        stack_policy_during_update_body = None
+
     disable_rollback = module.params['disable_rollback']
     template_parameters = module.params['template_parameters']
     tags = module.params['tags']
@@ -317,6 +323,7 @@ def main():
                              template_body=template_body,
                              notification_arns=notification_arns,
                              stack_policy_body=stack_policy_body,
+                             stack_policy_during_update_body=stack_policy_during_update_body,
                              template_url=template_url,
                              disable_rollback=disable_rollback,
                              capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
@@ -340,6 +347,7 @@ def main():
                              template_body=template_body,
                              notification_arns=notification_arns,
                              stack_policy_body=stack_policy_body,
+                             stack_policy_during_update_body=stack_policy_during_update_body,
                              disable_rollback=disable_rollback,
                              template_url=template_url,
                              capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'])
