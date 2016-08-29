@@ -60,6 +60,12 @@ options:
     required: false
     default: null
     version_added: "1.9"
+  stack_policy_during_update:
+    description:
+      - The path of a policy override to pass during an update operation (if passed, overrides stack_policy for this update).
+    required: false
+    default: null
+    version_added: "2.2"
   tags:
     description:
       - Dictionary of tags to associate with stack and it's resources during stack creation. Cannot be updated later.
