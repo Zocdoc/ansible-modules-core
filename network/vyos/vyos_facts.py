@@ -15,6 +15,10 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
+ANSIBLE_METADATA = {'status': ['preview'],
+                    'supported_by': 'community',
+                    'version': '1.0'}
+
 DOCUMENTATION = """
 ---
 module: vyos_facts
@@ -35,7 +39,7 @@ options:
         to a given subset.  Possible values for this argument include
         all, hardware, config, and interfaces.  Can specify a list of
         values to include a larger subset.  Values can also be used
-        with an initial M(!) to specify that a specific subset should
+        with an initial C(M(!)) to specify that a specific subset should
         not be collected.
     required: false
     default: "!config"
@@ -57,7 +61,7 @@ vars:
 
 - name: collect only the config and default facts
   vyos_facts:
-    gather_subset:config
+    gather_subset: config
 
 - name: collect everything exception the config
   vyos_facts:
@@ -70,7 +74,7 @@ ansible_net_config:
   returned: when config is configured
   type: str
 ansible_net_commits:
-  descrption: The set of available configuration revisions
+  description: The set of available configuration revisions
   returned: when present
   type: list
 ansible_net_hostname:
@@ -100,8 +104,11 @@ ansible_net_gather_subset:
 """
 import re
 
-from ansible.module_utils.netcmd import CommandRunner
-from ansible.module_utils.vyos import NetworkModule
+import ansible.module_utils.vyos
+from ansible.module_utils.pycompat24 import get_exception
+from ansible.module_utils.netcli import CommandRunner
+from ansible.module_utils.network import NetworkModule
+from ansible.module_utils.six import iteritems
 
 
 class FactsBase(object):
@@ -111,6 +118,9 @@ class FactsBase(object):
         self.facts = dict()
 
         self.commands()
+
+    def commands(self):
+        raise NotImplementedError
 
 
 class Default(FactsBase):
@@ -160,7 +170,7 @@ class Config(FactsBase):
         entry = None
 
         for line in commits.split('\n'):
-            match = re.match('(\d+)\s+(.+)by(.+)via(.+)', line)
+            match = re.match(r'(\d+)\s+(.+)by(.+)via(.+)', line)
             if match:
                 if entry:
                     entries.append(entry)
@@ -288,7 +298,7 @@ def main():
     for key in runable_subsets:
         instances.append(FACT_SUBSETS[key](runner))
 
-    runner.run_commands()
+    runner.run()
 
     try:
         for inst in instances:
@@ -299,7 +309,7 @@ def main():
         module.fail_json(msg='unknown failure', output=runner.items, exc=str(exc))
 
     ansible_facts = dict()
-    for key, value in facts.iteritems():
+    for key, value in iteritems(facts):
         key = 'ansible_net_%s' % key
         ansible_facts[key] = value
 

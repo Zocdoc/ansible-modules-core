@@ -16,6 +16,10 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+ANSIBLE_METADATA = {'status': ['preview'],
+                    'supported_by': 'community',
+                    'version': '1.0'}
+
 DOCUMENTATION = """
 ---
 module: vyos_config
@@ -39,43 +43,66 @@ options:
     default: null
   src:
     description:
-      - Path to the configuration file to load.
+      - The C(src) argument specifies the path to the source config
+        file to load.  The source config file can either be in
+        bracket format or set format.  The source file can include
+        Jinja2 template variables.
     required: no
     default: null
-  rollback:
+  match:
     description:
-      - Rollback the device configuration to the
-        revision specified.  If the specified rollback revision does
-        not exist, then the module will produce an error and fail.
-      - NOTE THIS WILL CAUSE THE DEVICE TO REBOOT AUTOMATICALLY.
+      - The C(match) argument controls the method used to match
+        against the current active configuration.  By default, the
+        desired config is matched against the active config and the
+        deltas are loaded.  If the C(match) argument is set to C(none)
+        the active configuration is ignored and the configuration is
+        always loaded.
+    required: false
+    default: line
+    choices: ['line', 'none']
+  backup:
+    description:
+      - The C(backup) argument will backup the current devices active
+        configuration to the Ansible control host prior to making any
+        changes.  The backup file will be located in the backup folder
+        in the root of the playbook
+    required: false
+    default: false
+    choices: ['yes', 'no']
+  comment:
+    description:
+      - Allows a commit description to be specified to be included
+        when the configuration is committed.  If the configuration is
+        not changed or committed, this argument is ignored.
+    required: false
+    default: 'configured by vyos_config'
+  config:
+    description:
+      - The C(config) argument specifies the base configuration to use
+        to compare against the desired configuration.  If this value
+        is not specified, the module will automatically retrieve the
+        current active configuration from the remote device.
     required: false
     default: null
-  update_config:
+  save:
     description:
-      - Should  the configuration on the remote device be updated with the
-        calculated changes. When set to true, the configuration will be updated
-        and when set to false, the configuration will not be updated.
-    required: false
-    default: true
-    choices: ['yes', 'no']
-  backup_config:
-    description:
-      - Create a local backup copy of the current running configuration
-        prior to making any changes.   The configuration file will be
-        stored in the backups folder in the root of the playbook or role.
+      - The C(save) argument controls whether or not changes made
+        to the active configuration are saved to disk.  This is
+        independent of committing the config.  When set to True, the
+        active configuration is saved.
     required: false
     default: false
     choices: ['yes', 'no']
 """
 
 RETURN = """
-connected:
-  description: Boolean that specifies if the module connected to the device
-  returned: always
-  type: bool
-  sample: true
 updates:
   description: The list of configuration commands sent to the device
+  returned: always
+  type: list
+  sample: ['...', '...']
+filtered:
+  description: The list of configuration commands removed to avoid a load failure
   returned: always
   type: list
   sample: ['...', '...']
@@ -99,22 +126,24 @@ vars:
       - delete service dhcp-server
     provider: "{{ cli }}"
 
-- name: rollback config to revision 3
+- name: backup and load from file
   vyos_config:
-    rollback: 3
+    src: vyos.cfg
+    backup: yes
     provider: "{{ cli }}"
 """
+import re
+
 from ansible.module_utils.network import Command, get_exception
 from ansible.module_utils.netcfg import NetworkConfig, dumps
 from ansible.module_utils.vyos import NetworkModule, NetworkError
-from ansible.module_utils.vyos import vyos_argument_spec
-from ansible.module_utils.vyos import load_config, load_candidate
 
 
-def invoke(name, *args, **kwargs):
-    func = globals().get(name)
-    if func:
-        return func(*args, **kwargs)
+DEFAULT_COMMENT = 'configured by vyos_config'
+
+CONFIG_FILTERS = [
+    re.compile(r'set system login user \S+ authentication encrypted-password')
+]
 
 
 def config_to_commands(config):
@@ -123,84 +152,142 @@ def config_to_commands(config):
     if not set_format:
         candidate = [c.line for c in candidate.items]
         commands = list()
+        # this filters out less specific lines
         for item in candidate:
             for index, entry in enumerate(commands):
                 if item.startswith(entry):
                     del commands[index]
                     break
             commands.append(item)
+
     else:
         commands = str(candidate).split('\n')
+
     return commands
 
+def get_config(module, result):
+    contents = module.params['config']
+    if not contents:
+        contents = module.config.get_config(output='set').split('\n')
+    else:
+        contents = config_to_commands(contents)
 
-def do_lines(module, result):
-    commands = module.params['lines']
-    result.update(load_config(module, commands))
+    return contents
+
+def get_candidate(module):
+    contents = module.params['src'] or module.params['lines']
+
+    if module.params['lines']:
+        contents = '\n'.join(contents)
+
+    return config_to_commands(contents)
+
+def diff_config(commands, config):
+    config = [str(c).replace("'", '') for c in config]
+
+    updates = list()
+    visited = set()
+
+    for line in commands:
+        item = str(line).replace("'", '')
+
+        if not item.startswith('set') and not item.startswith('delete'):
+            raise ValueError('line must start with either `set` or `delete`')
+
+        elif item.startswith('set') and item not in config:
+            updates.append(line)
+
+        elif item.startswith('delete'):
+            if not config:
+                updates.append(line)
+            else:
+                item = re.sub(r'delete', 'set', item)
+                for entry in config:
+                    if entry.startswith(item) and line not in visited:
+                        updates.append(line)
+                        visited.add(line)
+
+    return list(updates)
+
+def sanitize_config(config, result):
+    result['filtered'] = list()
+    for regex in CONFIG_FILTERS:
+        for index, line in enumerate(list(config)):
+            if regex.search(line):
+                result['filtered'].append(line)
+                del config[index]
+
+def load_config(module, commands, result):
+    comment = module.params['comment']
+    commit = not module.check_mode
+    save = module.params['save']
+
+    # sanitize loadable config to remove items that will fail
+    # remove items will be returned in the sanitized keyword
+    # in the result.
+    sanitize_config(commands, result)
+
+    diff = module.config.load_config(commands, commit=commit, comment=comment,
+                                     save=save)
+
+    if diff:
+        result['diff'] = dict(prepared=diff)
+        result['changed'] = True
 
 
-def do_src(module, result):
-    contents = module.params['src']
-    commands = config_to_commands(contents)
-    result.update(load_config(module, commands))
+def run(module, result):
+    # get the current active config from the node or passed in via
+    # the config param
+    config = get_config(module, result)
 
+    # create the candidate config object from the arguments
+    candidate = get_candidate(module)
 
-def do_rollback(module, result):
-    rollback = 'rollback %s' % module.params['rollback']
-    prompt = re.compile('\[confirm\]')
-    cmd = Command(rollback, prompt=prompt, response='y', is_reboot=True, delay=1)
+    # create loadable config that includes only the configuration updates
+    updates = diff_config(candidate, config)
 
-    try:
-        module.cli(['configure', cmd])
-    except NetworkError:
-        exc = get_exception()
-        cmds = [str(c) for c in exc.kwargs.get('commands', list())]
-        module.fail_json(msg=str(exc), commands=cmds)
+    result['updates'] = updates
+
+    load_config(module, updates, result)
+
+    if result.get('filtered'):
+        result['warnings'].append('Some configuration commands where '
+                                  'removed, please see the filtered key')
 
 
 def main():
 
     argument_spec = dict(
+        src=dict(type='path'),
         lines=dict(type='list'),
 
-        src=dict(type='path'),
+        match=dict(default='line', choices=['line', 'none']),
 
-        rollback=dict(type='int'),
+        comment=dict(default=DEFAULT_COMMENT),
 
-        update_config=dict(type='bool', default=False),
-        backup_config=dict(type='bool', default=False)
+        config=dict(),
+
+        backup=dict(default=False, type='bool'),
+        save=dict(default=False, type='bool'),
     )
-    argument_spec.update(vyos_argument_spec)
 
-    mutually_exclusive = [('lines', 'rollback'), ('lines', 'src'),
-                          ('src', 'rollback')]
+    mutually_exclusive = [('lines', 'src')]
 
     module = NetworkModule(argument_spec=argument_spec,
                            connect_on_load=False,
                            mutually_exclusive=mutually_exclusive,
                            supports_check_mode=True)
 
-    module.check_mode = not module.params['update_config']
+    result = dict(changed=False)
 
-    result = dict(changed=False, warnings=list())
+    if module.params['backup']:
+        result['__backup__'] = module.config.get_config()
 
-    if module.params['backup_config']:
-        result['__backup__'] = module.cli('show configuration')[0]
-
-    if module.params['lines']:
-        do_lines(module, result)
-
-    elif module.params['src']:
-        do_src(module, result)
-
-    elif module.params['rollback'] and not module.check_mode:
-        do_rollback(module, result)
-
-    if 'filtered' in result:
-        result['warnings'].append('Some configuration commands where '
-                                  'filtered, please see the filtered key')
-
-    result['connected'] = module.connected
+    try:
+        run(module, result)
+    except NetworkError:
+        exc = get_exception()
+        module.fail_json(msg=str(exc), **exc.kwargs)
 
     module.exit_json(**result)
 

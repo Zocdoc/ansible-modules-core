@@ -21,6 +21,10 @@
 
 ######################################################################
 
+ANSIBLE_METADATA = {'status': ['deprecated'],
+                    'supported_by': 'community',
+                    'version': '1.0'}
+
 DOCUMENTATION = '''
 ---
 module: docker
@@ -562,6 +566,8 @@ def _human_to_bytes(number):
 
     if isinstance(number, int):
         return number
+    if number.isdigit():
+        return int(number)
     if number[-1] == suffixes[0] and number[-2].isdigit():
         return number[:-1]
 
@@ -1301,10 +1307,12 @@ class DockerManager(object):
             for name, value in self.module.params.get('labels').iteritems():
                 expected_labels[name] = str(value)
 
-            actual_labels = {}
-            for container_label in container['Config']['Labels'] or []:
-                name, value = container_label.split('=', 1)
-                actual_labels[name] = value
+            if isinstance(container['Config']['Labels'], dict):
+                actual_labels = container['Config']['Labels']
+            else:
+                for container_label in container['Config']['Labels'] or []:
+                    name, value = container_label.split('=', 1)
+                    actual_labels[name] = value
 
             if actual_labels != expected_labels:
                 self.reload_reasons.append('labels {0} => {1}'.format(actual_labels, expected_labels))
@@ -1853,7 +1861,7 @@ def main():
             volumes_from    = dict(default=None, type='list'),
             links           = dict(default=None, type='list'),
             devices         = dict(default=None, type='list'),
-            memory_limit    = dict(default=0, type='int'),
+            memory_limit    = dict(default=0),
             memory_swap     = dict(default=0, type='int'),
             cpu_shares      = dict(default=0, type='int'),
             docker_url      = dict(),

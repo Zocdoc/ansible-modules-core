@@ -17,6 +17,10 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
+ANSIBLE_METADATA = {'status': ['preview'],
+                    'supported_by': 'committer',
+                    'version': '1.0'}
+
 DOCUMENTATION = '''
 ---
 module: docker_image
@@ -206,7 +210,7 @@ EXAMPLES = '''
     name: registry.ansible.com/chouseknecht/sinatra
     tag: v1
 
-- name: Build an image ad push it to a private repo
+- name: Build an image and push it to a private repo
   docker_image:
     path: ./sinatra
     name: registry.ansible.com/chouseknecht/sinatra
@@ -224,7 +228,6 @@ EXAMPLES = '''
     tag: v1
     push: yes
     load_path: my_sinatra.tar
-    push: True
 
 - name: Build image and with buildargs
    docker_image:
@@ -424,8 +427,7 @@ class ImageManager(DockerBaseClass):
             if not self.check_mode:
                 status = None
                 try:
-                    for line in self.client.push(repository, tag=tag, stream=True):
-                        line = json.loads(line)
+                    for line in self.client.push(repository, tag=tag, stream=True,  decode=True):
                         self.log(line, pretty_print=True)
                         if line.get('errorDetail'):
                             raise Exception(line['errorDetail']['message'])

@@ -19,6 +19,10 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+ANSIBLE_METADATA = {'status': ['stableinterface'],
+                    'supported_by': 'core',
+                    'version': '1.0'}
+
 DOCUMENTATION = '''
 ---
 module: async_status
@@ -50,6 +54,7 @@ author:
 
 import datetime
 import traceback
+from ansible.module_utils.six import iteritems
 
 def main():
 
@@ -78,7 +83,7 @@ def main():
 
     data = None
     try:
-        data = file(log_path).read()
+        data = open(log_path).read()
         data = json.loads(data)
     except Exception:
         if not data:
@@ -95,10 +100,12 @@ def main():
         data['finished'] = 0
 
     # Fix error: TypeError: exit_json() keywords must be strings
-    data = dict([(str(k), v) for k, v in data.iteritems()])
+    data = dict([(str(k), v) for k, v in iteritems(data)])
 
     module.exit_json(**data)
 
 # import module snippets
 from ansible.module_utils.basic import *
-main()
+
+if __name__ == '__main__':
+    main()

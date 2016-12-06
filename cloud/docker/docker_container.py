@@ -17,6 +17,10 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
+ANSIBLE_METADATA = {'status': ['preview'],
+                    'supported_by': 'committer',
+                    'version': '1.0'}
+
 DOCUMENTATION = '''
 ---
 module: docker_container
@@ -124,7 +128,8 @@ options:
     required: false
   exposed_ports:
     description:
-      - List of additional container ports to expose for port mappings or links.
+      - List of additional container ports which informs Docker that the container
+        listens on the specified network ports at runtime.
         If the port is already exposed using EXPOSE in a Dockerfile, it does not
         need to be exposed again.
     default: null
@@ -200,7 +205,7 @@ options:
     required: false
   log_driver:
     description:
-      - Specify the logging driver.
+      - Specify the logging driver. Docker uses json-file by default.
     choices:
       - json-file
       - syslog
@@ -209,7 +214,7 @@ options:
       - fluentd
       - awslogs
       - splunk
-    default: json-file
+    default: null
     required: false
   log_options:
     description:
@@ -276,6 +281,12 @@ options:
       - Whether or not to disable OOM Killer for the container.
     default: false
     required: false
+  oom_score_adj:
+    description:
+      - An integer value containing the score given to the container in order to tune OOM killer preferences.
+    default: 0
+    required: false
+    version_added: "2.2"
   paused:
     description:
       - Use with the started state to pause running processes inside the container.
@@ -283,7 +294,7 @@ options:
     required: false
   pid_mode:
     description:
-      - Set the PID namespace mode for the container. Currenly only supports 'host'.
+      - Set the PID namespace mode for the container. Currently only supports 'host'.
     default: null
     required: false
   privileged:
@@ -355,7 +366,7 @@ options:
     description:
       - Size of `/dev/shm`. The format is `<number><unit>`. `number` must be greater than `0`.
         Unit is optional and can be `b` (bytes), `k` (kilobytes), `m` (megabytes), or `g` (gigabytes).
-      - Ommitting the unit defaults to bytes. If you omit the size entirely, the system uses `64m`.
+      - Omitting the unit defaults to bytes. If you omit the size entirely, the system uses `64m`.
     default: null
     required: false
   security_opts:
@@ -405,7 +416,7 @@ options:
     description:
       - If true, skip image verification.
     default: false
-    requried: false
+    required: false
   tty:
     description:
       - Allocate a psuedo-TTY.
@@ -508,7 +519,7 @@ EXAMPLES = '''
     image: ubuntu:14.04
     command: sleep infinity 
 
-- name: Stop a contianer
+- name: Stop a container
   docker_container:
     name: mycontainer
     state: stopped
@@ -564,7 +575,6 @@ EXAMPLES = '''
 
 - name: Add container to networks
   docker_container:
-    docker_container:
     name: sleepy
     networks:
       - name: TestingNet
@@ -680,6 +690,7 @@ class TaskParameters(DockerBaseClass):
         self.cpuset_mems = None
         self.cpu_shares = None
         self.detach = None
+        self.debug = None
         self.devices = None
         self.dns_servers = None
         self.dns_opts = None
@@ -712,6 +723,7 @@ class TaskParameters(DockerBaseClass):
         self.network_mode = None
         self.networks = None
         self.oom_killer = None
+        self.oom_score_adj = None
         self.paused = None
         self.pid_mode = None
         self.privileged = None
@@ -908,6 +920,7 @@ class TaskParameters(DockerBaseClass):
             mem_limit='memory',
             memswap_limit='memory_swap',
             mem_swappiness='memory_swappiness',
+            oom_score_adj='oom_score_adj',
             shm_size='shm_size',
             group_add='groups',
             devices='devices',
@@ -1011,7 +1024,8 @@ class TaskParameters(DockerBaseClass):
                 protocol = 'tcp'
                 match = re.search(r'(/.+$)', port)
                 if match:
-                    protocol = match.group(1)
+                    protocol = match.group(1).replace('/', '')
+                    port = re.sub(r'/.+$', '', port)
                 exposed.append((port, protocol))
         if published_ports:
             # Any published port should also be exposed
@@ -1171,6 +1185,7 @@ class Container(DockerBaseClass):
         self.parameters.expected_etc_hosts = self._convert_simple_dict_to_list('etc_hosts')
         self.parameters.expected_env = self._get_expected_env(image)
         self.parameters.expected_cmd = self._get_expected_cmd()
+        self.parameters.expected_devices = self._get_expected_devices()
 
         if not self.container.get('HostConfig'):
             self.fail("has_config_diff: Error parsing container properties. HostConfig missing.")
@@ -1189,6 +1204,12 @@ class Container(DockerBaseClass):
         # assuming if the container was running, it must have been detached.
         detach = not (config.get('AttachStderr') and config.get('AttachStdout'))
 
+        # "ExposedPorts": null returns None type & causes AttributeError - PR #5517 
+        if config.get('ExposedPorts') is not None:
+            expected_exposed = [re.sub(r'/.+$', '', p) for p in config.get('ExposedPorts', dict()).keys()]
+        else:
+            expected_exposed = []
+
         # Map parameters to container inspect results
         config_mapping = dict(
             image=config.get('Image'),
@@ -1198,14 +1219,14 @@ class Container(DockerBaseClass):
             detach=detach,
             interactive=config.get('OpenStdin'),
             capabilities=host_config.get('CapAdd'),
-            devices=host_config.get('Devices'),
+            expected_devices=host_config.get('Devices'),
             dns_servers=host_config.get('Dns'),
             dns_opts=host_config.get('DnsOptions'),
             dns_search_domains=host_config.get('DnsSearch'),
             expected_env=(config.get('Env') or []),
             expected_entrypoint=config.get('Entrypoint'),
             expected_etc_hosts=host_config['ExtraHosts'],
-            expected_exposed=[re.sub(r'/.+$', '', p) for p in config.get('ExposedPorts', dict()).keys()],
+            expected_exposed=expected_exposed,
             groups=host_config.get('GroupAdd'),
             ipc_mode=host_config.get("IpcMode"),
             labels=config.get('Labels'),
@@ -1216,6 +1237,7 @@ class Container(DockerBaseClass):
             memory_swappiness=host_config.get('MemorySwappiness'),
             network_mode=host_config.get('NetworkMode'),
             oom_killer=host_config.get('OomKillDisable'),
+            oom_score_adj=host_config.get('OomScoreAdj'),
             pid_mode=host_config.get('PidMode'),
             privileged=host_config.get('Privileged'),
             expected_ports=host_config.get('PortBindings'),
@@ -1327,6 +1349,7 @@ class Container(DockerBaseClass):
             memory=host_config.get('Memory'),
             memory_reservation=host_config.get('MemoryReservation'),
             memory_swap=host_config.get('MemorySwap'),
+            oom_score_adj=host_config.get('OomScoreAdj'),
         )
 
         differences = []
@@ -1372,16 +1395,18 @@ class Container(DockerBaseClass):
                 if network.get('aliases') and not connected_networks[network['name']].get('Aliases'):
                     diff = True
                 if network.get('aliases') and connected_networks[network['name']].get('Aliases'):
-                    if set(network.get('aliases')) != set(connected_networks[network['name']].get('Aliases')):
-                        diff = True
+                    for alias in network.get('aliases'):
+                        if alias not in connected_networks[network['name']].get('Aliases', []):
+                            diff = True
                 if network.get('links') and not connected_networks[network['name']].get('Links'):
                     diff = True
                 if network.get('links') and connected_networks[network['name']].get('Links'):
                     expected_links = []
                     for link, alias in network['links'].iteritems():
                         expected_links.append("%s:%s" % (link, alias))
-                    if set(expected_links) != set(connected_networks[network['name']].get('Links', [])):
-                        diff = True
+                    for link in expected_links:
+                        if link not in connected_networks[network['name']].get('Links', []):
+                            diff = True
                 if diff:
                     different = True
                     differences.append(dict(
@@ -1418,6 +1443,37 @@ class Container(DockerBaseClass):
                     extra = True
                     extra_networks.append(dict(name=network, id=network_config['NetworkID']))
         return extra, extra_networks
+
+    def _get_expected_devices(self):
+        if not self.parameters.devices:
+            return None
+        expected_devices = []
+        for device in self.parameters.devices:
+            parts = device.split(':')
+            if len(parts) == 1:
+                expected_devices.append(
+                    dict(
+                        CgroupPermissions='rwm',
+                        PathInContainer=parts[0],
+                        PathOnHost=parts[0]
+                    ))
+            elif len(parts) == 2:
+                parts = device.split(':')
+                expected_devices.append(
+                    dict(
+                        CgroupPermissions='rwm',
+                        PathInContainer=parts[1],
+                        PathOnHost=parts[0]
+                    )
+                )
+            else:
+                expected_devices.append(
+                    dict(
+                    CgroupPermissions=parts[2],
+                    PathInContainer=parts[1],
+                    PathOnHost=parts[0]
+                ))
+        return expected_devices
 
     def _get_expected_entrypoint(self):
         self.log('_get_expected_entrypoint')
@@ -1606,13 +1662,10 @@ class ContainerManager(DockerBaseClass):
         elif state == 'absent':
             self.absent()
 
-        if not self.check_mode:
-            try:
-                del self.results['actions']
-            except:
-                pass
+        if not self.check_mode and not self.parameters.debug:
+            self.results.pop('actions')
 
-        if self.client.module._diff:
+        if self.client.module._diff or self.parameters.debug:
             self.results['diff'] = self.diff
 
         if self.facts:
@@ -1756,7 +1809,7 @@ class ContainerManager(DockerBaseClass):
             self.results['actions'].append(dict(added_to_network=diff['parameter']['name'], network_parameters=params))
             if not self.check_mode:
                 try:
-                    self.log("Connecting conainer to network %s" % diff['parameter']['id'])
+                    self.log("Connecting container to network %s" % diff['parameter']['id'])
                     self.log(params, pretty_print=True)
                     self.client.connect_container_to_network(container.Id, diff['parameter']['id'], **params)
                 except Exception as exc:
@@ -1766,9 +1819,9 @@ class ContainerManager(DockerBaseClass):
     def _purge_networks(self, container, networks):
         for network in networks:
             self.results['actions'].append(dict(removed_from_network=network['name']))
-            if not self.check_mode and network.get('id'):
+            if not self.check_mode:
                 try:
-                    self.client.disconnect_container_from_network(container.Id, network['id'])
+                    self.client.disconnect_container_from_network(container.Id, network['name'])
                 except Exception as exc:
                     self.fail("Error disconnecting container from network %s - %s" % (network['name'],
                                                                                       str(exc)))
@@ -1905,7 +1958,7 @@ def main():
         kill_signal=dict(type='str'),
         labels=dict(type='dict'),
         links=dict(type='list'),
-        log_driver=dict(type='str', choices=['json-file', 'syslog', 'journald', 'gelf', 'fluentd', 'awslogs', 'splunk'], default='json-file'),
+        log_driver=dict(type='str', choices=['json-file', 'syslog', 'journald', 'gelf', 'fluentd', 'awslogs', 'splunk'], default=None),
         log_options=dict(type='dict', aliases=['log_opt']),
         mac_address=dict(type='str'),
         memory=dict(type='str', default='0'),
@@ -1916,17 +1969,18 @@ def main():
         network_mode=dict(type='str'),
         networks=dict(type='list'),
         oom_killer=dict(type='bool'),
+        oom_score_adj=dict(type='int'),
         paused=dict(type='bool', default=False),
         pid_mode=dict(type='str'),
         privileged=dict(type='bool', default=False),
         published_ports=dict(type='list', aliases=['ports']),
         pull=dict(type='bool', default=False),
-        purge_networks=dict(type='bool', deault=False),
+        purge_networks=dict(type='bool', default=False),
         read_only=dict(type='bool', default=False),
         recreate=dict(type='bool', default=False),
         restart=dict(type='bool', default=False),
         restart_policy=dict(type='str', choices=['no', 'on-failure', 'always', 'unless-stopped']),
-        restart_retries=dict(type='int', default=0),
+        restart_retries=dict(type='int', default=None),
         shm_size=dict(type='str'),
         security_opts=dict(type='list'),
         state=dict(type='str', choices=['absent', 'present', 'started', 'stopped'], default='started'),

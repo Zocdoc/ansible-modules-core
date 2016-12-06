@@ -16,6 +16,10 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
+ANSIBLE_METADATA = {'status': ['preview'],
+                    'supported_by': 'community',
+                    'version': '1.0'}
+
 DOCUMENTATION = """
 ---
 module: junos_package
@@ -92,6 +96,9 @@ EXAMPLES = """
     src: junos-vsrx-12.1X46-D10.2-domestic.tgz
     reboot: no
 """
+import ansible.module_utils.junos
+
+from ansible.module_utils.network import NetworkModule
 
 try:
     from jnpr.junos.utils.sw import SW
@@ -127,8 +134,8 @@ def main():
         transport=dict(default='netconf', choices=['netconf'])
     )
 
-    module = get_module(argument_spec=spec,
-                        supports_check_mode=True)
+    module = NetworkModule(argument_spec=spec,
+                           supports_check_mode=True)
 
     if not HAS_SW:
         module.fail_json(msg='Missing jnpr.junos.utils.sw module')
@@ -137,8 +144,8 @@ def main():
 
     do_upgrade = module.params['force'] or False
     if not module.params['force']:
-        has_ver = module.get_facts().get('version')
-        wants_ver = module.params['version'] or package_version(module)
+        has_ver = module.connection.get_facts().get('version')
+        wants_ver = module.params['version']
         do_upgrade = has_ver != wants_ver
 
     if do_upgrade:
@@ -148,8 +155,6 @@ def main():
 
     module.exit_json(**result)
 
-from ansible.module_utils.basic import *
-from ansible.module_utils.junos import *
 
 if __name__ == '__main__':
     main()

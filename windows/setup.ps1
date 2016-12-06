@@ -17,9 +17,7 @@
 # WANT_JSON
 # POWERSHELL_COMMON
 
-# enabled $params (David O'Brien, 06/08/2015)
-$params = Parse-Args $args;
-
+$params = Parse-Args $args -supports_check_mode $true
 
 Function Get-CustomFacts {
   [cmdletBinding()]
@@ -127,7 +125,6 @@ Set-Attr $result.ansible_facts "ansible_owner_contact" ([string] $win32_cs.Prima
 Set-Attr $result.ansible_facts "ansible_user_dir" $env:userprofile
 Set-Attr $result.ansible_facts "ansible_user_gecos" "" # Win32_UserAccount.FullName is probably the right thing here, but it can be expensive to get on large domains
 Set-Attr $result.ansible_facts "ansible_user_id" $env:username
-Set-Attr $result.ansible_facts "ansible_user_uid" ([int] $user.User.Value.Substring(42))
 Set-Attr $result.ansible_facts "ansible_user_sid" $user.User.Value
 
 $date = New-Object psobject
